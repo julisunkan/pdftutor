@@ -1,0 +1,13 @@
+bind = "0.0.0.0:5000"
+workers = 1
+worker_class = "sync"
+timeout = 300
+keepalive = 2
+max_requests = 100
+max_requests_jitter = 10
+preload_app = True
+worker_connections = 1000
+limit_request_field_size = 8190
+limit_request_fields = 100
+limit_request_line = 4094
+reload = True

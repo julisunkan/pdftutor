@@ -22,6 +22,8 @@ from PIL import Image
 logging.basicConfig(level=logging.INFO)
 # Reduce pdfminer logging to prevent conflicts
 logging.getLogger('pdfminer').setLevel(logging.WARNING)
+logging.getLogger('pdfplumber').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-production")
@@ -111,7 +113,7 @@ def is_blank_page(page_content):
     return not has_content
 
 def extract_pdf_content_pdfplumber(pdf_path):
-    """Extract PDF content using pdfplumber"""
+    """Extract PDF content using pdfplumber with optimizations for large files"""
     content = {
         'pages': [],
         'total_pages': 0,
@@ -124,7 +126,15 @@ def extract_pdf_content_pdfplumber(pdf_path):
         content['metadata'] = pdf.metadata or {}
         content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
         
+        # For very large PDFs, limit detailed processing
+        process_images = content['total_pages'] < 200
+        process_detailed_text = content['total_pages'] < 500
+        
+        logging.info(f"Processing {content['total_pages']} pages. Images: {process_images}, Detailed text: {process_detailed_text}")
+        
         for i, page in enumerate(pdf.pages):
+            if i % 50 == 0:
+                logging.info(f"Processing page {i+1}/{content['total_pages']}")
             page_content = {
                 'page_number': i + 1,
                 'text': '',
@@ -142,42 +152,49 @@ def extract_pdf_content_pdfplumber(pdf_path):
                 if text:
                     page_content['text'] = text.strip()
                 
-                # Extract structured text with positioning
-                chars = page.chars
-                if chars:
-                    # Group characters into text blocks
-                    text_blocks = []
-                    current_block = {'text': '', 'bbox': None, 'fontsize': None}
-                    
-                    for char in chars:
-                        if current_block['text'] and (
-                            abs(char.get('size', 0) - (current_block['fontsize'] or 0)) > 2 or
-                            char.get('top', 0) > (current_block['bbox'][3] if current_block['bbox'] else 0) + 10
-                        ):
-                            if current_block['text'].strip():
-                                text_blocks.append(current_block)
-                            current_block = {'text': '', 'bbox': None, 'fontsize': None}
+                # Extract structured text with positioning (optimized for large files)
+                if process_detailed_text:
+                    chars = page.chars
+                    if chars:
+                        # Group characters into text blocks (limit processing for speed)
+                        text_blocks = []
+                        current_block = {'text': '', 'bbox': None, 'fontsize': None}
                         
-                        current_block['text'] += char.get('text', '')
-                        if not current_block['bbox']:
-                            current_block['bbox'] = [char.get('x0', 0), char.get('top', 0), char.get('x1', 0), char.get('bottom', 0)]
-                            current_block['fontsize'] = char.get('size', 12)
-                        else:
-                            current_block['bbox'][2] = max(current_block['bbox'][2], char.get('x1', 0))
-                            current_block['bbox'][3] = max(current_block['bbox'][3], char.get('bottom', 0))
-                    
-                    if current_block['text'].strip():
-                        text_blocks.append(current_block)
-                    
-                    page_content['structured_text'] = text_blocks
-                    
-                    # Add text blocks to elements list for ordering
-                    for block in text_blocks:
-                        page_content['elements'].append({
-                            'type': 'text',
-                            'content': block,
-                            'position': block['bbox'][1] if block['bbox'] else 0
-                        })
+                        # Limit character processing for very large pages
+                        chars_to_process = chars[:2000] if len(chars) > 2000 else chars
+                        
+                        for char in chars_to_process:
+                            if current_block['text'] and (
+                                abs(char.get('size', 0) - (current_block['fontsize'] or 0)) > 2 or
+                                char.get('top', 0) > (current_block['bbox'][3] if current_block['bbox'] else 0) + 10
+                            ):
+                                if current_block['text'].strip():
+                                    text_blocks.append(current_block)
+                                current_block = {'text': '', 'bbox': None, 'fontsize': None}
+                            
+                            current_block['text'] += char.get('text', '')
+                            if not current_block['bbox']:
+                                current_block['bbox'] = [char.get('x0', 0), char.get('top', 0), char.get('x1', 0), char.get('bottom', 0)]
+                                current_block['fontsize'] = char.get('size', 12)
+                            else:
+                                current_block['bbox'][2] = max(current_block['bbox'][2], char.get('x1', 0))
+                                current_block['bbox'][3] = max(current_block['bbox'][3], char.get('bottom', 0))
+                        
+                        if current_block['text'].strip():
+                            text_blocks.append(current_block)
+                        
+                        page_content['structured_text'] = text_blocks
+                        
+                        # Add text blocks to elements list for ordering
+                        for block in text_blocks:
+                            page_content['elements'].append({
+                                'type': 'text',
+                                'content': block,
+                                'position': block['bbox'][1] if block['bbox'] else 0
+                            })
+                else:
+                    # Simple text extraction for large files
+                    page_content['structured_text'] = [{'text': page_content['text'], 'bbox': [0, 0, page.width, page.height], 'fontsize': 12}]
             except Exception as e:
                 logging.warning(f"Could not extract text from page {i+1}: {e}")
                 page_content['text'] = f"[Text extraction failed for page {i+1}]"
@@ -235,41 +252,47 @@ def extract_pdf_content_pdfplumber(pdf_path):
             except Exception as e:
                 logging.warning(f"Could not extract tables from page {i+1}: {e}")
             
-            # Extract images with enhanced positioning
-            try:
-                if hasattr(page, 'images') and page.images:
-                    for img_idx, img in enumerate(page.images):
-                        try:
-                            # Ensure bbox exists
-                            bbox = img.get('bbox')
-                            if not bbox:
-                                logging.warning(f"No bbox for image {img_idx} on page {i+1}")
-                                continue
+            # Extract images with enhanced positioning (optimized)
+            if process_images:
+                try:
+                    if hasattr(page, 'images') and page.images:
+                        # Limit number of images processed per page for performance
+                        images_to_process = page.images[:10] if len(page.images) > 10 else page.images
+                        for img_idx, img in enumerate(images_to_process):
+                            try:
+                                # Ensure bbox exists
+                                bbox = img.get('bbox')
+                                if not bbox:
+                                    logging.warning(f"No bbox for image {img_idx} on page {i+1}")
+                                    continue
+                                    
+                                # Extract image data with optimized resolution
+                                resolution = 100 if content['total_pages'] > 100 else 150  # Lower resolution for large files
+                                img_obj = page.crop(bbox).to_image(resolution=resolution)
+                                img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
+                                img_obj.save(img_path, format='PNG', optimize=True, quality=85)
                                 
-                            # Extract image data with better quality
-                            img_obj = page.crop(bbox).to_image(resolution=150)  # Higher resolution
-                            img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
-                            img_obj.save(img_path, format='PNG', optimize=True)
-                            
-                            image_data = {
-                                'path': img_path,
-                                'bbox': bbox,
-                                'index': img_idx,
-                                'width': bbox[2] - bbox[0],
-                                'height': bbox[3] - bbox[1]
-                            }
-                            page_content['images'].append(image_data)
-                            
-                            # Add image to elements list for ordering
-                            page_content['elements'].append({
-                                'type': 'image',
-                                'content': image_data,
-                                'position': bbox[1]
-                            })
-                        except Exception as e:
-                            logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
-            except Exception as e:
-                logging.warning(f"Error processing images on page {i+1}: {e}")
+                                image_data = {
+                                    'path': img_path,
+                                    'bbox': bbox,
+                                    'index': img_idx,
+                                    'width': bbox[2] - bbox[0],
+                                    'height': bbox[3] - bbox[1]
+                                }
+                                page_content['images'].append(image_data)
+                                
+                                # Add image to elements list for ordering
+                                page_content['elements'].append({
+                                    'type': 'image',
+                                    'content': image_data,
+                                    'position': bbox[1]
+                                })
+                            except Exception as e:
+                                logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
+                except Exception as e:
+                    logging.warning(f"Error processing images on page {i+1}: {e}")
+            else:
+                logging.info(f"Skipping image extraction for large file (page {i+1})")
             
             # Sort elements by position for proper layout
             page_content['elements'].sort(key=lambda x: x['position'])
