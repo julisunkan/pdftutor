@@ -1,0 +1,146 @@
+Develop a Python/Flask web app that renders a PDF as a mobile-style interactive tutorial. The app must extract text, tables, and images from the PDF and present them in a colorful, responsive interface with smooth navigation, search, bookmarks, notes, themes, progress tracking, text-to-speech, and optional PWA offline support.
+
+Features
+Content Rendering
+
+Extract text, images, and tables from PDF using pdfplumber or PyMuPDF.
+
+Render content dynamically in HTML per page.
+
+Optional: convert pages to images for high-fidelity rendering.
+
+Mobile-Style UI / Navigation
+
+Colorful header/navigation bar with app title and page number.
+
+Smooth slide transitions for page changes.
+
+Floating action buttons: bookmarks, notes, search, theme toggle.
+
+Thumbnails carousel for quick page preview.
+
+Navigation Features
+
+Previous / Next buttons and jump-to-page input.
+
+Swipe gestures for mobile devices.
+
+Continuous scroll vs single-page toggle.
+
+Multi-page spread mode (optional).
+
+Search & Table of Contents
+
+Full-text search with highlighted matches.
+
+Auto-generated Table of Contents from headings.
+
+Clicking search or ToC items jumps to the page with animation.
+
+Bookmarks & Notes
+
+Bookmark pages.
+
+Add notes per page.
+
+Save locally in localStorage or optionally to backend.
+
+Sync across sessions.
+
+Themes & Personalization
+
+Light / Dark / Sepia / Custom color themes.
+
+Adjustable font size, zoom, and font type.
+
+Highlight important content.
+
+Optional custom background or branding.
+
+Accessibility
+
+Text-to-speech for pages or selected text (Web Speech API).
+
+Keyboard navigation for desktop users.
+
+High-contrast mode.
+
+Pinch-to-zoom and swipe gestures for mobile.
+
+Engagement Features
+
+Reading progress bar.
+
+Estimated reading time per page/chapter.
+
+Achievements / badges (e.g., “Read 5 chapters today”).
+
+Track last read page for session continuation.
+
+Sharing & Export
+
+Export notes and highlights (PDF/JSON).
+
+Share bookmarks or pages via URL.
+
+Print selected pages or chapters.
+
+Download PDF (original or annotated).
+
+Offline & Installation
+
+PWA support for offline use.
+
+Cache PDF pages, notes, bookmarks.
+
+Background sync for online update.
+
+Advanced / “Wow” Features
+
+Animated page turns.
+
+AI-powered highlights for key points.
+
+Interactive quizzes (if PDF is learning content).
+
+Multi-language UI support.
+
+Voice commands (e.g., “Next page”, “Go to chapter 3”).
+
+Custom branding: colors, fonts, logos.
+
+Project Structure
+/MobileTutorialPDFApp
+│
+├─ /static
+│   ├─ /css
+│   │    └─ style.css
+│   ├─ /js
+│   │    └─ script.js
+│   ├─ /images       # extracted PDF images
+│   └─ /pdfs
+│        └─ tutorial.pdf
+│
+├─ /templates
+│   └─ index.html
+│
+├─ app.py
+├─ requirements.txt
+└─ manifest.json     # optional for PWA
+
+Dependencies (requirements.txt)
+flask
+pdfplumber
+pillow
+pdf2image       # optional, for page images
+PyMuPDF          # optional, for precise rendering
+
+Flask Endpoints
+
+/ – Home page, renders tutorial from PDF.
+
+/pdf/<filename> – Optional: serve PDF files.
+
+/bookmark – Optional API for saving/retrieving bookmarks.
+
+/note – Optional API for saving/retrieving notes.
