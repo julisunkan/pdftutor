@@ -113,7 +113,7 @@ def extract_pdf_content_pymupdf(pdf_path):
     
     doc = fitz.open(pdf_path)
     content['total_pages'] = doc.page_count
-    content['metadata'] = doc.metadata
+    content['metadata'] = doc.metadata or {}
     content['title'] = content['metadata'].get('title', 'PDF Tutorial') or 'PDF Tutorial'
     
     for i in range(doc.page_count):
@@ -128,7 +128,7 @@ def extract_pdf_content_pymupdf(pdf_path):
         
         # Extract text
         try:
-            text = page.get_text()
+            text = page.get_text() if hasattr(page, 'get_text') else ''
             if text:
                 page_content['text'] = text.strip()
         except Exception as e:
@@ -194,13 +194,13 @@ def upload_file():
         return redirect(url_for('index'))
     
     file = request.files['file']
-    if file.filename == '':
+    if not file or not file.filename or file.filename == '':
         flash('No file selected', 'error')
         return redirect(url_for('index'))
     
     if file and allowed_file(file.filename):
         try:
-            filename = secure_filename(file.filename)
+            filename = secure_filename(file.filename or 'unknown.pdf')
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(filepath)
             
