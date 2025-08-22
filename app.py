@@ -66,6 +66,19 @@ def load_pdf_data(pdf_id):
         logging.error(f"Error loading PDF data: {e}")
         return None
 
+def is_blank_page(page_content):
+    """Determine if a page is considered blank/empty"""
+    text = page_content.get('text', '').strip()
+    images = page_content.get('images', [])
+    tables = page_content.get('tables', [])
+    
+    # Page is blank if:
+    # 1. No images and no tables
+    # 2. Text is empty or very minimal (less than 20 chars, likely just page numbers)
+    has_content = bool(images or tables or (text and len(text) > 20))
+    
+    return not has_content
+
 def extract_pdf_content_pdfplumber(pdf_path):
     """Extract PDF content using pdfplumber"""
     content = {
@@ -128,7 +141,18 @@ def extract_pdf_content_pdfplumber(pdf_path):
             except Exception as e:
                 logging.warning(f"Error processing images on page {i+1}: {e}")
             
-            content['pages'].append(page_content)
+            # Only add page if it's not blank
+            if not is_blank_page(page_content):
+                content['pages'].append(page_content)
+            else:
+                logging.info(f"Skipping blank page {i+1}")
+    
+    # Renumber pages after filtering
+    for idx, page in enumerate(content['pages']):
+        page['page_number'] = idx + 1
+    
+    # Update total pages count
+    content['total_pages'] = len(content['pages'])
     
     return content
 
@@ -186,9 +210,21 @@ def extract_pdf_content_pymupdf(pdf_path):
         except Exception as e:
             logging.warning(f"Error processing images on page {i+1}: {e}")
         
-        content['pages'].append(page_content)
+        # Only add page if it's not blank
+        if not is_blank_page(page_content):
+            content['pages'].append(page_content)
+        else:
+            logging.info(f"Skipping blank page {i+1}")
     
     doc.close()
+    
+    # Renumber pages after filtering
+    for idx, page in enumerate(content['pages']):
+        page['page_number'] = idx + 1
+    
+    # Update total pages count
+    content['total_pages'] = len(content['pages'])
+    
     return content
 
 def extract_pdf_content(pdf_path):
