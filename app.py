@@ -112,8 +112,8 @@ def is_blank_page(page_content):
     
     return not has_content
 
-def extract_pdf_content_pdfplumber(pdf_path):
-    """Extract PDF content using pdfplumber with optimizations for large files"""
+def convert_pdf_to_images(pdf_path):
+    """Convert PDF pages to images - much faster than text extraction"""
     content = {
         'pages': [],
         'total_pages': 0,
@@ -121,195 +121,123 @@ def extract_pdf_content_pdfplumber(pdf_path):
         'metadata': {}
     }
     
-    with pdfplumber.open(pdf_path) as pdf:
-        content['total_pages'] = len(pdf.pages)
-        content['metadata'] = pdf.metadata or {}
-        content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
+    try:
+        # Try using pdf2image first (fast and reliable)
+        from pdf2image import convert_from_path
         
-        # For very large PDFs, limit detailed processing
-        process_images = content['total_pages'] < 200
-        process_detailed_text = content['total_pages'] < 500
+        # Get PDF metadata
+        with pdfplumber.open(pdf_path) as pdf:
+            content['metadata'] = pdf.metadata or {}
+            content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
+            content['total_pages'] = len(pdf.pages)
         
-        logging.info(f"Processing {content['total_pages']} pages. Images: {process_images}, Detailed text: {process_detailed_text}")
+        logging.info(f"Converting {content['total_pages']} pages to images...")
         
-        for i, page in enumerate(pdf.pages):
-            if i % 50 == 0:
-                logging.info(f"Processing page {i+1}/{content['total_pages']}")
+        # Convert PDF to images with optimized settings
+        dpi = 150 if content['total_pages'] < 200 else 100  # Lower DPI for large files
+        
+        # Process in batches to manage memory
+        batch_size = 50 if content['total_pages'] > 200 else 100
+        
+        for start_page in range(0, content['total_pages'], batch_size):
+            end_page = min(start_page + batch_size, content['total_pages'])
+            logging.info(f"Processing pages {start_page + 1}-{end_page}...")
+            
+            try:
+                images = convert_from_path(
+                    pdf_path,
+                    dpi=dpi,
+                    first_page=start_page + 1,
+                    last_page=end_page,
+                    fmt='JPEG',
+                    jpegopt={'quality': 85, 'progressive': True, 'optimize': True}
+                )
+                
+                for i, image in enumerate(images):
+                    page_num = start_page + i + 1
+                    img_path = os.path.join(EXTRACTED_FOLDER, f'page_{page_num}.jpg')
+                    
+                    # Save optimized image
+                    image.save(img_path, 'JPEG', quality=85, optimize=True)
+                    
+                    page_content = {
+                        'page_number': page_num,
+                        'image_path': img_path,
+                        'width': image.width,
+                        'height': image.height,
+                        'text': '',  # Keep for search functionality if needed
+                        'type': 'image'
+                    }
+                    content['pages'].append(page_content)
+                    
+            except Exception as e:
+                logging.error(f"Error converting pages {start_page + 1}-{end_page}: {e}")
+                # Continue with next batch
+                continue
+        
+        content['total_pages'] = len(content['pages'])
+        logging.info(f"Successfully converted {content['total_pages']} pages to images")
+        return content
+        
+    except ImportError:
+        logging.warning("pdf2image not available, falling back to PyMuPDF")
+        return convert_pdf_to_images_pymupdf(pdf_path)
+    except Exception as e:
+        logging.error(f"pdf2image failed: {e}, falling back to PyMuPDF")
+        return convert_pdf_to_images_pymupdf(pdf_path)
+
+def convert_pdf_to_images_pymupdf(pdf_path):
+    """Convert PDF to images using PyMuPDF as fallback"""
+    if fitz is None:
+        raise ImportError("PyMuPDF (fitz) is not available")
+    
+    content = {
+        'pages': [],
+        'total_pages': 0,
+        'title': '',
+        'metadata': {}
+    }
+    
+    doc = fitz.open(pdf_path)
+    content['total_pages'] = doc.page_count
+    content['metadata'] = doc.metadata or {}
+    content['title'] = content['metadata'].get('title', 'PDF Tutorial') or 'PDF Tutorial'
+    
+    logging.info(f"Converting {content['total_pages']} pages to images using PyMuPDF...")
+    
+    # Optimize matrix for different file sizes
+    zoom = 1.5 if content['total_pages'] < 200 else 1.0  # Lower zoom for large files
+    mat = fitz.Matrix(zoom, zoom)
+    
+    for i in range(doc.page_count):
+        if i % 50 == 0:
+            logging.info(f"Converting page {i+1}/{content['total_pages']}")
+            
+        try:
+            page = doc[i]
+            pix = page.get_pixmap(matrix=mat)
+            
+            img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}.jpg')
+            pix.save(img_path, output='jpg', jpg_quality=85)
+            
             page_content = {
                 'page_number': i + 1,
+                'image_path': img_path,
+                'width': pix.width,
+                'height': pix.height,
                 'text': '',
-                'structured_text': [],
-                'images': [],
-                'tables': [],
-                'bbox': page.bbox,
-                'elements': []  # Combined ordered elements for layout preservation
+                'type': 'image'
             }
+            content['pages'].append(page_content)
+            pix = None  # Free memory
             
-            # Extract text with better formatting preservation
-            try:
-                # Extract plain text
-                text = page.extract_text()
-                if text:
-                    page_content['text'] = text.strip()
-                
-                # Extract structured text with positioning (optimized for large files)
-                if process_detailed_text:
-                    chars = page.chars
-                    if chars:
-                        # Group characters into text blocks (limit processing for speed)
-                        text_blocks = []
-                        current_block = {'text': '', 'bbox': None, 'fontsize': None}
-                        
-                        # Limit character processing for very large pages
-                        chars_to_process = chars[:2000] if len(chars) > 2000 else chars
-                        
-                        for char in chars_to_process:
-                            if current_block['text'] and (
-                                abs(char.get('size', 0) - (current_block['fontsize'] or 0)) > 2 or
-                                char.get('top', 0) > (current_block['bbox'][3] if current_block['bbox'] else 0) + 10
-                            ):
-                                if current_block['text'].strip():
-                                    text_blocks.append(current_block)
-                                current_block = {'text': '', 'bbox': None, 'fontsize': None}
-                            
-                            current_block['text'] += char.get('text', '')
-                            if not current_block['bbox']:
-                                current_block['bbox'] = [char.get('x0', 0), char.get('top', 0), char.get('x1', 0), char.get('bottom', 0)]
-                                current_block['fontsize'] = char.get('size', 12)
-                            else:
-                                current_block['bbox'][2] = max(current_block['bbox'][2], char.get('x1', 0))
-                                current_block['bbox'][3] = max(current_block['bbox'][3], char.get('bottom', 0))
-                        
-                        if current_block['text'].strip():
-                            text_blocks.append(current_block)
-                        
-                        page_content['structured_text'] = text_blocks
-                        
-                        # Add text blocks to elements list for ordering
-                        for block in text_blocks:
-                            page_content['elements'].append({
-                                'type': 'text',
-                                'content': block,
-                                'position': block['bbox'][1] if block['bbox'] else 0
-                            })
-                else:
-                    # Simple text extraction for large files
-                    page_content['structured_text'] = [{'text': page_content['text'], 'bbox': [0, 0, page.width, page.height], 'fontsize': 12}]
-            except Exception as e:
-                logging.warning(f"Could not extract text from page {i+1}: {e}")
-                page_content['text'] = f"[Text extraction failed for page {i+1}]"
-            
-            # Extract tables with enhanced formatting
-            try:
-                tables = page.extract_tables()
-                if tables:
-                    for table_idx, table in enumerate(tables):
-                        if table and len(table) > 0:  # Skip empty tables
-                            # Get table settings for better formatting
-                            table_settings = {
-                                'vertical_strategy': 'lines',
-                                'horizontal_strategy': 'lines'
-                            }
-                            
-                            # Try to get table with settings
-                            try:
-                                formatted_table = page.extract_table(table_settings)
-                                if formatted_table:
-                                    table = formatted_table
-                            except:
-                                pass
-                            
-                            # Find table position
-                            table_bbox = None
-                            try:
-                                # Estimate table position from first and last cells
-                                if hasattr(page, 'crop'):
-                                    try:
-                                        table_objects = list(page.filter(lambda x: x.get('object_type') == 'rect'))
-                                        if table_objects:
-                                            table_bbox = [min(obj['x0'] for obj in table_objects),
-                                                        min(obj['top'] for obj in table_objects),
-                                                        max(obj['x1'] for obj in table_objects),
-                                                        max(obj['bottom'] for obj in table_objects)]
-                                    except:
-                                        table_bbox = [0, 0, page.width, 50]
-                            except:
-                                table_bbox = [0, 0, page.width, 50]  # Default position
-                            
-                            table_data = {
-                                'data': table,
-                                'bbox': table_bbox,
-                                'index': table_idx
-                            }
-                            page_content['tables'].append(table_data)
-                            
-                            # Add table to elements list for ordering
-                            page_content['elements'].append({
-                                'type': 'table',
-                                'content': table_data,
-                                'position': table_bbox[1] if table_bbox else 0
-                            })
-            except Exception as e:
-                logging.warning(f"Could not extract tables from page {i+1}: {e}")
-            
-            # Extract images with enhanced positioning (optimized)
-            if process_images:
-                try:
-                    if hasattr(page, 'images') and page.images:
-                        # Limit number of images processed per page for performance
-                        images_to_process = page.images[:10] if len(page.images) > 10 else page.images
-                        for img_idx, img in enumerate(images_to_process):
-                            try:
-                                # Ensure bbox exists
-                                bbox = img.get('bbox')
-                                if not bbox:
-                                    logging.warning(f"No bbox for image {img_idx} on page {i+1}")
-                                    continue
-                                    
-                                # Extract image data with optimized resolution
-                                resolution = 100 if content['total_pages'] > 100 else 150  # Lower resolution for large files
-                                img_obj = page.crop(bbox).to_image(resolution=resolution)
-                                img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
-                                img_obj.save(img_path, format='PNG', optimize=True, quality=85)
-                                
-                                image_data = {
-                                    'path': img_path,
-                                    'bbox': bbox,
-                                    'index': img_idx,
-                                    'width': bbox[2] - bbox[0],
-                                    'height': bbox[3] - bbox[1]
-                                }
-                                page_content['images'].append(image_data)
-                                
-                                # Add image to elements list for ordering
-                                page_content['elements'].append({
-                                    'type': 'image',
-                                    'content': image_data,
-                                    'position': bbox[1]
-                                })
-                            except Exception as e:
-                                logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
-                except Exception as e:
-                    logging.warning(f"Error processing images on page {i+1}: {e}")
-            else:
-                logging.info(f"Skipping image extraction for large file (page {i+1})")
-            
-            # Sort elements by position for proper layout
-            page_content['elements'].sort(key=lambda x: x['position'])
-            
-            # Only add page if it's not blank
-            if not is_blank_page(page_content):
-                content['pages'].append(page_content)
-            else:
-                logging.info(f"Skipping blank page {i+1}")
+        except Exception as e:
+            logging.warning(f"Error converting page {i+1}: {e}")
+            continue
     
-    # Renumber pages after filtering
-    for idx, page in enumerate(content['pages']):
-        page['page_number'] = idx + 1
-    
-    # Update total pages count
+    doc.close()
     content['total_pages'] = len(content['pages'])
-    
+    logging.info(f"Successfully converted {content['total_pages']} pages to images")
     return content
 
 def extract_pdf_content_pymupdf(pdf_path):
@@ -427,20 +355,8 @@ def extract_pdf_content_pymupdf(pdf_path):
     return content
 
 def extract_pdf_content(pdf_path):
-    """Extract text, images, and basic table data from PDF with fallback methods"""
-    try:
-        # Try pdfplumber first (better for tables and structured text)
-        logging.info("Attempting PDF extraction with pdfplumber...")
-        return extract_pdf_content_pdfplumber(pdf_path)
-    except Exception as e:
-        logging.warning(f"pdfplumber failed: {e}")
-        try:
-            # Fallback to PyMuPDF (more robust for problematic PDFs)
-            logging.info("Falling back to PyMuPDF extraction...")
-            return extract_pdf_content_pymupdf(pdf_path)
-        except Exception as e2:
-            logging.error(f"Both extraction methods failed. pdfplumber: {e}, PyMuPDF: {e2}")
-            raise Exception(f"Failed to process PDF with both methods: pdfplumber ({str(e)}) and PyMuPDF ({str(e2)})")
+    """Convert PDF pages to images for fast loading"""
+    return convert_pdf_to_images(pdf_path)
 
 @app.route('/')
 def index():
@@ -517,7 +433,7 @@ def upload_file():
 
 @app.route('/api/page/<int:page_num>')
 def get_page(page_num):
-    """Get specific page content"""
+    """Get specific page image"""
     if 'pdf_id' not in session:
         return jsonify({'error': 'No PDF loaded'}), 400
     
@@ -532,9 +448,18 @@ def get_page(page_num):
     page_content = pdf_content['pages'][page_num - 1]
     session['current_page'] = page_num
     
+    # Convert absolute path to relative path for serving
+    image_path = page_content['image_path'].replace('static/', '')
+    
     return jsonify({
         'success': True,
-        'page': page_content,
+        'page': {
+            'page_number': page_content['page_number'],
+            'image_url': f'/static/{image_path}',
+            'width': page_content['width'],
+            'height': page_content['height'],
+            'type': 'image'
+        },
         'total_pages': pdf_content['total_pages'],
         'current_page': page_num
     })

@@ -133,7 +133,7 @@ class PDFTutorialApp {
             
             if (data.success) {
                 this.currentPage = pageNum;
-                this.renderPage(data.page);
+                this.renderPageImage(data.page);
                 this.updateNavigation();
                 this.updateProgress();
                 this.updateThumbnails();
@@ -263,6 +263,58 @@ class PDFTutorialApp {
         if (noteText) {
             html += `
                 <div class="page-note alert alert-info">
+                    <h6><i class="fas fa-sticky-note me-2"></i>Your Note:</h6>
+                    <p class="mb-0">${this.escapeHtml(noteText)}</p>
+                </div>
+            `;
+        }
+        
+        html += '</div>';
+        
+        // Apply page transition
+        pageContent.style.opacity = '0';
+        setTimeout(() => {
+            pageContent.innerHTML = html;
+            pageContent.style.opacity = '1';
+        }, 150);
+    }
+    
+    renderPageImage(pageData) {
+        const pageContent = document.getElementById('pageContent');
+        if (!pageContent) return;
+        
+        let html = `
+            <div class="page-card animate-in">
+                <div class="page-header">
+                    <div class="page-number">
+                        Page ${pageData.page_number}
+                    </div>
+                    <div class="page-actions">
+                        <button class="btn btn-sm btn-outline-primary bookmark-btn ${this.bookmarks.includes(pageData.page_number) ? 'bookmarked' : ''}" 
+                                onclick="app.toggleBookmark()" title="Bookmark this page">
+                            <i class="fas fa-bookmark"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" 
+                                onclick="app.addNote()" title="Add note">
+                            <i class="fas fa-sticky-note"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="page-image-container">
+                    <img src="${pageData.image_url}" 
+                         class="page-image img-fluid" 
+                         alt="Page ${pageData.page_number}" 
+                         style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);"
+                         loading="lazy">
+                </div>
+        `;
+        
+        // Add note if exists
+        const noteText = this.notes[pageData.page_number];
+        if (noteText) {
+            html += `
+                <div class="page-note alert alert-info mt-3">
                     <h6><i class="fas fa-sticky-note me-2"></i>Your Note:</h6>
                     <p class="mb-0">${this.escapeHtml(noteText)}</p>
                 </div>
