@@ -32,7 +32,7 @@ UPLOAD_FOLDER = 'static/uploads'
 EXTRACTED_FOLDER = 'static/extracted'
 DATA_FOLDER = 'static/data'
 ALLOWED_EXTENSIONS = {'pdf'}
-MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
+MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['EXTRACTED_FOLDER'] = EXTRACTED_FOLDER
