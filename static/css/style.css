@@ -200,6 +200,31 @@ body {
   transform: scale(1.02);
 }
 
+/* Enhanced content structure styles */
+.page-text-block {
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+  word-wrap: break-word;
+  hyphens: auto;
+  text-align: justify;
+}
+
+.page-image {
+  text-align: center;
+  margin: 1rem 0;
+  padding: 0.5rem;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.page-table {
+  margin: 1rem 0;
+  overflow-x: auto;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
 /* Sidebar */
 .sidebar {
   background: var(--bg-secondary);

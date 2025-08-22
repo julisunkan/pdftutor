@@ -72,10 +72,21 @@ def is_blank_page(page_content):
     images = page_content.get('images', [])
     tables = page_content.get('tables', [])
     
+    # Check for structured content
+    elements = page_content.get('elements', [])
+    structured_text = page_content.get('structured_text', [])
+    
     # Page is blank if:
-    # 1. No images and no tables
+    # 1. No images, tables, or structured elements
     # 2. Text is empty or very minimal (less than 20 chars, likely just page numbers)
-    has_content = bool(images or tables or (text and len(text) > 20))
+    # 3. No elements in the structured layout
+    
+    has_content_elements = len(elements) > 0
+    has_structured_text = len(structured_text) > 0
+    has_media = bool(images or tables)
+    has_substantial_text = text and len(text) > 20
+    
+    has_content = has_content_elements or has_structured_text or has_media or has_substantial_text
     
     return not has_content
 
@@ -97,49 +108,148 @@ def extract_pdf_content_pdfplumber(pdf_path):
             page_content = {
                 'page_number': i + 1,
                 'text': '',
+                'structured_text': [],
                 'images': [],
                 'tables': [],
-                'bbox': page.bbox
+                'bbox': page.bbox,
+                'elements': []  # Combined ordered elements for layout preservation
             }
             
-            # Extract text with error handling
+            # Extract text with better formatting preservation
             try:
+                # Extract plain text
                 text = page.extract_text()
                 if text:
                     page_content['text'] = text.strip()
+                
+                # Extract structured text with positioning
+                chars = page.chars
+                if chars:
+                    # Group characters into text blocks
+                    text_blocks = []
+                    current_block = {'text': '', 'bbox': None, 'fontsize': None}
+                    
+                    for char in chars:
+                        if current_block['text'] and (
+                            abs(char.get('size', 0) - (current_block['fontsize'] or 0)) > 2 or
+                            char.get('top', 0) > (current_block['bbox'][3] if current_block['bbox'] else 0) + 10
+                        ):
+                            if current_block['text'].strip():
+                                text_blocks.append(current_block)
+                            current_block = {'text': '', 'bbox': None, 'fontsize': None}
+                        
+                        current_block['text'] += char.get('text', '')
+                        if not current_block['bbox']:
+                            current_block['bbox'] = [char.get('x0', 0), char.get('top', 0), char.get('x1', 0), char.get('bottom', 0)]
+                            current_block['fontsize'] = char.get('size', 12)
+                        else:
+                            current_block['bbox'][2] = max(current_block['bbox'][2], char.get('x1', 0))
+                            current_block['bbox'][3] = max(current_block['bbox'][3], char.get('bottom', 0))
+                    
+                    if current_block['text'].strip():
+                        text_blocks.append(current_block)
+                    
+                    page_content['structured_text'] = text_blocks
+                    
+                    # Add text blocks to elements list for ordering
+                    for block in text_blocks:
+                        page_content['elements'].append({
+                            'type': 'text',
+                            'content': block,
+                            'position': block['bbox'][1] if block['bbox'] else 0
+                        })
             except Exception as e:
                 logging.warning(f"Could not extract text from page {i+1}: {e}")
                 page_content['text'] = f"[Text extraction failed for page {i+1}]"
             
-            # Extract tables with error handling
+            # Extract tables with enhanced formatting
             try:
                 tables = page.extract_tables()
                 if tables:
-                    for table in tables:
-                        if table:  # Skip empty tables
-                            page_content['tables'].append(table)
+                    for table_idx, table in enumerate(tables):
+                        if table and len(table) > 0:  # Skip empty tables
+                            # Get table settings for better formatting
+                            table_settings = {
+                                'vertical_strategy': 'lines',
+                                'horizontal_strategy': 'lines'
+                            }
+                            
+                            # Try to get table with settings
+                            try:
+                                formatted_table = page.extract_table(table_settings)
+                                if formatted_table:
+                                    table = formatted_table
+                            except:
+                                pass
+                            
+                            # Find table position
+                            table_bbox = None
+                            try:
+                                # Estimate table position from first and last cells
+                                if hasattr(page, 'crop'):
+                                    table_objects = page.filter(lambda x: x.get('object_type') == 'rect')
+                                    if table_objects:
+                                        table_bbox = [min(obj['x0'] for obj in table_objects),
+                                                    min(obj['top'] for obj in table_objects),
+                                                    max(obj['x1'] for obj in table_objects),
+                                                    max(obj['bottom'] for obj in table_objects)]
+                            except:
+                                table_bbox = [0, 0, page.width, 50]  # Default position
+                            
+                            table_data = {
+                                'data': table,
+                                'bbox': table_bbox,
+                                'index': table_idx
+                            }
+                            page_content['tables'].append(table_data)
+                            
+                            # Add table to elements list for ordering
+                            page_content['elements'].append({
+                                'type': 'table',
+                                'content': table_data,
+                                'position': table_bbox[1] if table_bbox else 0
+                            })
             except Exception as e:
                 logging.warning(f"Could not extract tables from page {i+1}: {e}")
             
-            # Extract images with error handling
+            # Extract images with enhanced positioning
             try:
                 if hasattr(page, 'images') and page.images:
                     for img_idx, img in enumerate(page.images):
                         try:
-                            # Extract image data
-                            img_obj = page.crop(img['bbox']).to_image()
+                            # Ensure bbox exists
+                            bbox = img.get('bbox')
+                            if not bbox:
+                                logging.warning(f"No bbox for image {img_idx} on page {i+1}")
+                                continue
+                                
+                            # Extract image data with better quality
+                            img_obj = page.crop(bbox).to_image(resolution=150)  # Higher resolution
                             img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
-                            img_obj.save(img_path)
+                            img_obj.save(img_path, format='PNG', optimize=True)
                             
-                            page_content['images'].append({
+                            image_data = {
                                 'path': img_path,
-                                'bbox': img['bbox'],
-                                'index': img_idx
+                                'bbox': bbox,
+                                'index': img_idx,
+                                'width': bbox[2] - bbox[0],
+                                'height': bbox[3] - bbox[1]
+                            }
+                            page_content['images'].append(image_data)
+                            
+                            # Add image to elements list for ordering
+                            page_content['elements'].append({
+                                'type': 'image',
+                                'content': image_data,
+                                'position': bbox[1]
                             })
                         except Exception as e:
                             logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
             except Exception as e:
                 logging.warning(f"Error processing images on page {i+1}: {e}")
+            
+            # Sort elements by position for proper layout
+            page_content['elements'].sort(key=lambda x: x['position'])
             
             # Only add page if it's not blank
             if not is_blank_page(page_content):
@@ -175,40 +285,80 @@ def extract_pdf_content_pymupdf(pdf_path):
         page_content = {
             'page_number': i + 1,
             'text': '',
+            'structured_text': [],
             'images': [],
             'tables': [],
-            'bbox': page.rect
+            'bbox': page.rect,
+            'elements': []
         }
         
-        # Extract text
+        # Extract text with structure
         try:
             text = page.get_text()
             if text:
                 page_content['text'] = text.strip()
+            
+            # Extract text blocks with formatting
+            text_blocks = page.get_text("dict")
+            if text_blocks and 'blocks' in text_blocks:
+                for block in text_blocks['blocks']:
+                    if 'lines' in block:
+                        for line in block['lines']:
+                            if 'spans' in line:
+                                line_text = ''.join(span.get('text', '') for span in line['spans'])
+                                if line_text.strip():
+                                    text_block = {
+                                        'text': line_text,
+                                        'bbox': line.get('bbox', [0, 0, 0, 0]),
+                                        'fontsize': line['spans'][0].get('size', 12) if line['spans'] else 12
+                                    }
+                                    page_content['structured_text'].append(text_block)
+                                    page_content['elements'].append({
+                                        'type': 'text',
+                                        'content': text_block,
+                                        'position': text_block['bbox'][1]
+                                    })
         except Exception as e:
             logging.warning(f"Could not extract text from page {i+1}: {e}")
             page_content['text'] = f"[Text extraction failed for page {i+1}]"
         
-        # Extract images
+        # Extract images with positioning
         try:
-            image_list = page.get_images()
+            image_list = page.get_images(full=True)
             for img_idx, img in enumerate(image_list):
                 try:
                     xref = img[0]
                     pix = fitz.Pixmap(doc, xref)
+                    
                     if pix.n < 5:  # GRAY or RGB
                         img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
                         pix.save(img_path)
-                        page_content['images'].append({
+                        
+                        # Try to get image position
+                        img_rects = page.get_image_rects(xref)
+                        img_bbox = img_rects[0] if img_rects else [0, 0, pix.width, pix.height]
+                        
+                        image_data = {
                             'path': img_path,
-                            'bbox': [0, 0, pix.width, pix.height],
-                            'index': img_idx
+                            'bbox': img_bbox,
+                            'index': img_idx,
+                            'width': pix.width,
+                            'height': pix.height
+                        }
+                        page_content['images'].append(image_data)
+                        page_content['elements'].append({
+                            'type': 'image',
+                            'content': image_data,
+                            'position': img_bbox[1] if img_bbox else 0
                         })
                     pix = None
                 except Exception as e:
                     logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
         except Exception as e:
             logging.warning(f"Error processing images on page {i+1}: {e}")
+        
+        # Sort elements by position for proper layout
+        page_content['elements'].sort(key=lambda x: x['position'])
         
         # Only add page if it's not blank
         if not is_blank_page(page_content):

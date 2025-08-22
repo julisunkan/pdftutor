@@ -172,22 +172,64 @@ class PDFTutorialApp {
                 </div>
         `;
         
-        // Add text content
-        if (pageData.text) {
-            html += `
-                <div class="page-text">
-                    ${this.escapeHtml(pageData.text)}
-                </div>
-            `;
+        // Add structured content in order
+        if (pageData.elements && pageData.elements.length > 0) {
+            // Render elements in their original order for proper layout
+            pageData.elements.forEach(element => {
+                if (element.type === 'text') {
+                    const textContent = element.content;
+                    const fontSize = textContent.fontsize ? Math.max(12, Math.min(textContent.fontsize, 24)) : 14;
+                    html += `
+                        <div class="page-text-block" style="font-size: ${fontSize}px; margin-bottom: 0.5rem;">
+                            ${this.escapeHtml(textContent.text)}
+                        </div>
+                    `;
+                } else if (element.type === 'image') {
+                    const imageContent = element.content;
+                    html += `
+                        <div class="page-image mb-3">
+                            <img src="/${imageContent.path}" class="pdf-image img-fluid" alt="Page ${pageData.page_number} Image" 
+                                 style="max-width: 100%; height: auto;">
+                        </div>
+                    `;
+                } else if (element.type === 'table') {
+                    const tableContent = element.content;
+                    if (tableContent.data && tableContent.data.length > 0) {
+                        html += '<div class="page-table mb-3">';
+                        html += '<table class="table table-striped pdf-table">';
+                        tableContent.data.forEach((row, rowIndex) => {
+                            if (row) {
+                                const tag = rowIndex === 0 ? 'th' : 'td';
+                                html += '<tr>';
+                                row.forEach(cell => {
+                                    html += `<${tag}>${this.escapeHtml(cell || '')}</${tag}>`;
+                                });
+                                html += '</tr>';
+                            }
+                        });
+                        html += '</table></div>';
+                    }
+                }
+            });
+        } else {
+            // Fallback to old format if elements not available
+            if (pageData.text) {
+                html += `
+                    <div class="page-text">
+                        ${this.escapeHtml(pageData.text)}
+                    </div>
+                `;
+            }
         }
         
-        // Add tables
-        if (pageData.tables && pageData.tables.length > 0) {
+        // Legacy table rendering for fallback
+        if (!pageData.elements && pageData.tables && pageData.tables.length > 0) {
             html += '<div class="page-tables">';
             pageData.tables.forEach((table, index) => {
-                if (table && table.length > 0) {
+                let tableData = table.data || table; // Handle both new and old format
+                if (tableData && tableData.length > 0) {
                     html += '<table class="table table-striped pdf-table mb-3">';
-                    table.forEach((row, rowIndex) => {
+                    tableData.forEach((row, rowIndex) => {
                         if (row) {
                             const tag = rowIndex === 0 ? 'th' : 'td';
                             html += '<tr>';
@@ -203,8 +245,8 @@ class PDFTutorialApp {
             html += '</div>';
         }
         
-        // Add images
-        if (pageData.images && pageData.images.length > 0) {
+        // Legacy image rendering for fallback
+        if (!pageData.elements && pageData.images && pageData.images.length > 0) {
             html += '<div class="page-images">';
             pageData.images.forEach(image => {
                 html += `
