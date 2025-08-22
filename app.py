@@ -44,6 +44,20 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(EXTRACTED_FOLDER, exist_ok=True)
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
+@app.errorhandler(500)
+def internal_error(error):
+    """Handle internal server errors"""
+    logging.error(f"Internal server error: {error}")
+    flash('An internal error occurred while processing your request. Please try again.', 'error')
+    return redirect(url_for('index'))
+
+@app.errorhandler(413)
+def too_large(error):
+    """Handle file too large errors"""
+    logging.error(f"File too large: {error}")
+    flash('File too large. Please upload a file smaller than 500MB.', 'error')
+    return redirect(url_for('index'))
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -420,45 +434,62 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle PDF file upload"""
-    if 'file' not in request.files:
-        flash('No file selected', 'error')
-        return redirect(url_for('index'))
-    
-    file = request.files['file']
-    if not file or not file.filename or file.filename == '':
-        flash('No file selected', 'error')
-        return redirect(url_for('index'))
-    
-    if file and allowed_file(file.filename):
-        try:
-            filename = secure_filename(file.filename or 'unknown.pdf')
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            
-            # Extract PDF content
-            pdf_content = extract_pdf_content(filepath)
-            
-            # Save PDF data to disk and store only ID in session
-            pdf_id = save_pdf_data(pdf_content, filename)
-            session['current_pdf'] = filename
-            session['pdf_id'] = pdf_id
-            session['current_page'] = 1
-            
-            # Store basic metadata in session for UI
-            session['pdf_metadata'] = {
-                'title': pdf_content['title'],
-                'total_pages': pdf_content['total_pages']
-            }
-            
-            flash(f'Successfully loaded: {pdf_content["title"]}', 'success')
+    try:
+        if 'file' not in request.files:
+            flash('No file selected', 'error')
             return redirect(url_for('index'))
-            
-        except Exception as e:
-            logging.error(f"Error processing upload: {e}")
-            flash(f'Error processing PDF: {str(e)}', 'error')
+        
+        file = request.files['file']
+        if not file or not file.filename or file.filename == '':
+            flash('No file selected', 'error')
             return redirect(url_for('index'))
-    else:
-        flash('Invalid file type. Please upload a PDF file.', 'error')
+        
+        if file and allowed_file(file.filename):
+            try:
+                filename = secure_filename(file.filename or 'unknown.pdf')
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                
+                logging.info(f"Saving file to: {filepath}")
+                file.save(filepath)
+                
+                # Check file size
+                file_size = os.path.getsize(filepath)
+                logging.info(f"Uploaded file size: {file_size} bytes")
+                
+                # Extract PDF content
+                logging.info("Starting PDF content extraction...")
+                pdf_content = extract_pdf_content(filepath)
+                logging.info(f"Extracted {pdf_content['total_pages']} pages")
+                
+                # Save PDF data to disk and store only ID in session
+                pdf_id = save_pdf_data(pdf_content, filename)
+                session['current_pdf'] = filename
+                session['pdf_id'] = pdf_id
+                session['current_page'] = 1
+                
+                # Store basic metadata in session for UI
+                session['pdf_metadata'] = {
+                    'title': pdf_content['title'],
+                    'total_pages': pdf_content['total_pages']
+                }
+                
+                flash(f'Successfully loaded: {pdf_content["title"]}', 'success')
+                return redirect(url_for('index'))
+                
+            except Exception as e:
+                logging.error(f"Error processing upload: {e}")
+                import traceback
+                logging.error(f"Full traceback: {traceback.format_exc()}")
+                flash(f'Error processing PDF: {str(e)}', 'error')
+                return redirect(url_for('index'))
+        else:
+            flash('Invalid file type. Please upload a PDF file.', 'error')
+            return redirect(url_for('index'))
+    except Exception as e:
+        logging.error(f"Error in upload_file function: {e}")
+        import traceback
+        logging.error(f"Full traceback: {traceback.format_exc()}")
+        flash(f'Upload error: {str(e)}', 'error')
         return redirect(url_for('index'))
 
 @app.route('/api/page/<int:page_num>')
