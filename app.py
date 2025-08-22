@@ -9,7 +9,13 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 import pdfplumber
-import fitz  # PyMuPDF
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    try:
+        import pymupdf as fitz  # Alternative import
+    except ImportError:
+        fitz = None  # PyMuPDF not available
 from PIL import Image
 
 # Configure logging with reduced verbosity
@@ -187,12 +193,15 @@ def extract_pdf_content_pdfplumber(pdf_path):
                             try:
                                 # Estimate table position from first and last cells
                                 if hasattr(page, 'crop'):
-                                    table_objects = page.filter(lambda x: x.get('object_type') == 'rect')
-                                    if table_objects:
-                                        table_bbox = [min(obj['x0'] for obj in table_objects),
-                                                    min(obj['top'] for obj in table_objects),
-                                                    max(obj['x1'] for obj in table_objects),
-                                                    max(obj['bottom'] for obj in table_objects)]
+                                    try:
+                                        table_objects = list(page.filter(lambda x: x.get('object_type') == 'rect'))
+                                        if table_objects:
+                                            table_bbox = [min(obj['x0'] for obj in table_objects),
+                                                        min(obj['top'] for obj in table_objects),
+                                                        max(obj['x1'] for obj in table_objects),
+                                                        max(obj['bottom'] for obj in table_objects)]
+                                    except:
+                                        table_bbox = [0, 0, page.width, 50]
                             except:
                                 table_bbox = [0, 0, page.width, 50]  # Default position
                             
@@ -268,6 +277,9 @@ def extract_pdf_content_pdfplumber(pdf_path):
 
 def extract_pdf_content_pymupdf(pdf_path):
     """Extract PDF content using PyMuPDF as fallback"""
+    if fitz is None:
+        raise ImportError("PyMuPDF (fitz) is not available")
+        
     content = {
         'pages': [],
         'total_pages': 0,
