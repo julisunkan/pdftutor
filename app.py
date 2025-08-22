@@ -2,6 +2,8 @@ import os
 import logging
 import json
 import base64
+import pickle
+import hashlib
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for, flash
 from werkzeug.utils import secure_filename
@@ -22,19 +24,47 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 # Configuration
 UPLOAD_FOLDER = 'static/uploads'
 EXTRACTED_FOLDER = 'static/extracted'
+DATA_FOLDER = 'static/data'
 ALLOWED_EXTENSIONS = {'pdf'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['EXTRACTED_FOLDER'] = EXTRACTED_FOLDER
+app.config['DATA_FOLDER'] = DATA_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(EXTRACTED_FOLDER, exist_ok=True)
+os.makedirs(DATA_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def save_pdf_data(pdf_content, filename):
+    """Save PDF content to disk and return an ID for session storage"""
+    # Create a unique ID for this PDF
+    pdf_id = hashlib.md5(f"{filename}_{len(pdf_content['pages'])}_{pdf_content['total_pages']}".encode()).hexdigest()
+    
+    # Save to disk
+    data_path = os.path.join(app.config['DATA_FOLDER'], f'{pdf_id}.pkl')
+    with open(data_path, 'wb') as f:
+        pickle.dump(pdf_content, f)
+    
+    return pdf_id
+
+def load_pdf_data(pdf_id):
+    """Load PDF content from disk using ID"""
+    data_path = os.path.join(app.config['DATA_FOLDER'], f'{pdf_id}.pkl')
+    if not os.path.exists(data_path):
+        return None
+    
+    try:
+        with open(data_path, 'rb') as f:
+            return pickle.load(f)
+    except Exception as e:
+        logging.error(f"Error loading PDF data: {e}")
+        return None
 
 def extract_pdf_content_pdfplumber(pdf_path):
     """Extract PDF content using pdfplumber"""
@@ -128,7 +158,7 @@ def extract_pdf_content_pymupdf(pdf_path):
         
         # Extract text
         try:
-            text = page.get_text() if hasattr(page, 'get_text') else ''
+            text = page.get_text()
             if text:
                 page_content['text'] = text.strip()
         except Exception as e:
@@ -180,10 +210,13 @@ def extract_pdf_content(pdf_path):
 @app.route('/')
 def index():
     """Main page - show upload form or tutorial if PDF is in session"""
-    if 'current_pdf' in session and 'pdf_content' in session:
-        return render_template('index.html', 
-                             pdf_content=session['pdf_content'],
-                             current_page=session.get('current_page', 1))
+    if 'current_pdf' in session and 'pdf_id' in session:
+        # Load minimal data needed for initial rendering
+        pdf_metadata = session.get('pdf_metadata', {})
+        if pdf_metadata:
+            return render_template('index.html', 
+                                 pdf_content=pdf_metadata,
+                                 current_page=session.get('current_page', 1))
     return render_template('index.html', pdf_content=None)
 
 @app.route('/upload', methods=['POST'])
@@ -207,10 +240,17 @@ def upload_file():
             # Extract PDF content
             pdf_content = extract_pdf_content(filepath)
             
-            # Store in session
+            # Save PDF data to disk and store only ID in session
+            pdf_id = save_pdf_data(pdf_content, filename)
             session['current_pdf'] = filename
-            session['pdf_content'] = pdf_content
+            session['pdf_id'] = pdf_id
             session['current_page'] = 1
+            
+            # Store basic metadata in session for UI
+            session['pdf_metadata'] = {
+                'title': pdf_content['title'],
+                'total_pages': pdf_content['total_pages']
+            }
             
             flash(f'Successfully loaded: {pdf_content["title"]}', 'success')
             return redirect(url_for('index'))
@@ -226,10 +266,14 @@ def upload_file():
 @app.route('/api/page/<int:page_num>')
 def get_page(page_num):
     """Get specific page content"""
-    if 'pdf_content' not in session:
+    if 'pdf_id' not in session:
         return jsonify({'error': 'No PDF loaded'}), 400
     
-    pdf_content = session['pdf_content']
+    # Load PDF content from disk
+    pdf_content = load_pdf_data(session['pdf_id'])
+    if not pdf_content:
+        return jsonify({'error': 'PDF data not found'}), 400
+    
     if page_num < 1 or page_num > pdf_content['total_pages']:
         return jsonify({'error': 'Invalid page number'}), 400
     
@@ -247,10 +291,13 @@ def get_page(page_num):
 def search():
     """Search through PDF content"""
     query = request.args.get('q', '').strip().lower()
-    if not query or 'pdf_content' not in session:
+    if not query or 'pdf_id' not in session:
         return jsonify({'results': []})
     
-    pdf_content = session['pdf_content']
+    # Load PDF content from disk
+    pdf_content = load_pdf_data(session['pdf_id'])
+    if not pdf_content:
+        return jsonify({'results': []})
     results = []
     
     for page in pdf_content['pages']:
