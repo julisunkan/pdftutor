@@ -654,6 +654,67 @@ body {
   animation: fadeIn 0.5s ease-out;
 }
 
+/* Progress Container Styles */
+.progress-container {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(10px);
+    animation: progressFadeIn 0.3s ease-in-out;
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.progress-info span {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.progress {
+    border-radius: 6px;
+    overflow: hidden;
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.progress-bar {
+    transition: width 0.3s ease;
+    border-radius: 6px;
+}
+
+#progressDetails {
+    display: block;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    opacity: 0.8;
+}
+
+/* Upload form enhancements */
+#uploadBtn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.upload-form {
+    position: relative;
+}
+
+@keyframes progressFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 /* Print Styles */
 @media print {
   .app-header,

@@ -59,13 +59,26 @@
             <h2 class="mb-3">Upload Your PDF Tutorial</h2>
             <p class="text-muted mb-4">Transform your PDF into an interactive, mobile-friendly tutorial experience</p>
             
-            <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data" class="upload-form">
+            <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data" class="upload-form" id="uploadForm">
                 <div class="mb-3">
                     <input type="file" class="form-control form-control-lg" id="pdfFile" name="file" accept=".pdf" required>
                 </div>
-                <button type="submit" class="btn btn-primary btn-lg">
+                <button type="submit" class="btn btn-primary btn-lg" id="uploadBtn">
                     <i class="fas fa-upload me-2"></i>Upload PDF
                 </button>
+                
+                <!-- Progress Container -->
+                <div id="progressContainer" class="progress-container mt-4" style="display: none;">
+                    <div class="progress-info mb-2">
+                        <span id="progressText">Preparing upload...</span>
+                        <span id="progressPercent" class="float-end">0%</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                             id="progressBar" style="width: 0%"></div>
+                    </div>
+                    <small id="progressDetails" class="text-muted mt-1"></small>
+                </div>
             </form>
             
             <div class="upload-info mt-4">
@@ -261,4 +274,181 @@ window.pdfData = {
 };
 </script>
 {% endif %}
+
+<script>
+// Upload progress functionality
+class UploadProgressHandler {
+    constructor() {
+        this.form = document.getElementById('uploadForm');
+        this.progressContainer = document.getElementById('progressContainer');
+        this.progressBar = document.getElementById('progressBar');
+        this.progressText = document.getElementById('progressText');
+        this.progressPercent = document.getElementById('progressPercent');
+        this.progressDetails = document.getElementById('progressDetails');
+        this.uploadBtn = document.getElementById('uploadBtn');
+        this.fileInput = document.getElementById('pdfFile');
+        
+        this.bindEvents();
+    }
+    
+    bindEvents() {
+        if (this.form) {
+            this.form.addEventListener('submit', (e) => this.handleUpload(e));
+        }
+    }
+    
+    async handleUpload(e) {
+        e.preventDefault();
+        
+        const file = this.fileInput.files[0];
+        if (!file) {
+            alert('Please select a PDF file');
+            return;
+        }
+        
+        // Show progress container
+        this.progressContainer.style.display = 'block';
+        this.uploadBtn.disabled = true;
+        this.uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Uploading...';
+        
+        // Create FormData
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        try {
+            // Start upload with progress tracking
+            await this.uploadWithProgress(formData);
+        } catch (error) {
+            this.showError(`Upload failed: ${error.message}`);
+        }
+    }
+    
+    async uploadWithProgress(formData) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            
+            // Track upload progress
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const uploadPercent = Math.round((e.loaded / e.total) * 100);
+                    const limitedPercent = Math.min(uploadPercent, 15); // Limit upload progress to 15%
+                    this.updateProgress(limitedPercent, 'Uploading file...', '');
+                }
+            });
+            
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    // Start conversion progress polling
+                    this.updateProgress(20, 'Upload complete, starting conversion...', '');
+                    this.startProgressPolling();
+                    
+                    // Handle redirect after completion
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 2000);
+                    
+                    resolve();
+                } else {
+                    reject(new Error(`Server error: ${xhr.status}`));
+                }
+            };
+            
+            xhr.onerror = () => reject(new Error('Network error'));
+            xhr.ontimeout = () => reject(new Error('Upload timeout'));
+            
+            xhr.open('POST', '/upload');
+            xhr.timeout = 300000; // 5 minutes timeout
+            xhr.send(formData);
+        });
+    }
+    
+    async startProgressPolling() {
+        const pollInterval = setInterval(async () => {
+            try {
+                const response = await fetch('/api/progress');
+                const progress = await response.json();
+                
+                this.updateProgress(progress.percent, progress.message, progress.details || '');
+                
+                if (progress.status === 'complete') {
+                    clearInterval(pollInterval);
+                    this.updateProgress(100, 'Conversion complete! Redirecting...', 'Ready to view your PDF tutorial');
+                    
+                    // Auto-redirect after completion
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1500);
+                } else if (progress.status === 'error') {
+                    clearInterval(pollInterval);
+                    this.showError(progress.message);
+                }
+            } catch (error) {
+                console.error('Progress polling error:', error);
+                // Continue polling, don't stop on temporary errors
+            }
+        }, 1000); // Poll every second
+        
+        // Safety timeout - stop polling after 10 minutes
+        setTimeout(() => {
+            clearInterval(pollInterval);
+        }, 600000);
+    }
+    
+    updateProgress(percent, message, details) {
+        if (this.progressBar) {
+            this.progressBar.style.width = `${percent}%`;
+            this.progressBar.setAttribute('aria-valuenow', percent);
+        }
+        
+        if (this.progressPercent) {
+            this.progressPercent.textContent = `${percent}%`;
+        }
+        
+        if (this.progressText) {
+            this.progressText.textContent = message;
+        }
+        
+        if (this.progressDetails && details) {
+            this.progressDetails.textContent = details;
+        }
+        
+        // Update progress bar color based on progress
+        if (this.progressBar) {
+            this.progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+            if (percent >= 100) {
+                this.progressBar.classList.add('bg-success');
+            } else if (percent >= 50) {
+                this.progressBar.classList.add('bg-info');
+            } else {
+                this.progressBar.classList.add('bg-primary');
+            }
+        }
+    }
+    
+    showError(message) {
+        this.updateProgress(0, 'Upload failed', message);
+        
+        if (this.progressBar) {
+            this.progressBar.classList.remove('bg-primary', 'bg-info', 'bg-success');
+            this.progressBar.classList.add('bg-danger');
+            this.progressBar.classList.remove('progress-bar-animated');
+        }
+        
+        // Re-enable upload button
+        this.uploadBtn.disabled = false;
+        this.uploadBtn.innerHTML = '<i class="fas fa-upload me-2"></i>Try Again';
+        
+        // Hide progress after delay
+        setTimeout(() => {
+            this.progressContainer.style.display = 'none';
+            this.uploadBtn.innerHTML = '<i class="fas fa-upload me-2"></i>Upload PDF';
+        }, 5000);
+    }
+}
+
+// Initialize upload progress handler when page loads
+document.addEventListener('DOMContentLoaded', () => {
+    new UploadProgressHandler();
+});
+</script>
 {% endblock %}

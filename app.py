@@ -358,6 +358,170 @@ def extract_pdf_content(pdf_path):
     """Convert PDF pages to images for fast loading"""
     return convert_pdf_to_images(pdf_path)
 
+def extract_pdf_content_with_progress(pdf_path):
+    """Convert PDF pages to images with progress tracking"""
+    try:
+        # Try using pdf2image first (fast and reliable)
+        from pdf2image import convert_from_path
+        
+        content = {
+            'pages': [],
+            'total_pages': 0,
+            'title': '',
+            'metadata': {}
+        }
+        
+        # Get PDF metadata
+        with pdfplumber.open(pdf_path) as pdf:
+            content['metadata'] = pdf.metadata or {}
+            content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
+            content['total_pages'] = len(pdf.pages)
+        
+        # Update progress
+        session['conversion_progress']['percent'] = 20
+        session['conversion_progress']['message'] = f'Converting {content["total_pages"]} pages to images...'
+        session['conversion_progress']['details'] = f'Processing {content["total_pages"]} pages'
+        session.modified = True
+        
+        logging.info(f"Converting {content['total_pages']} pages to images...")
+        
+        # Convert PDF to images with optimized settings
+        dpi = 150 if content['total_pages'] < 200 else 100  # Lower DPI for large files
+        
+        # Process in batches to manage memory
+        batch_size = 50 if content['total_pages'] > 200 else 100
+        
+        for start_page in range(0, content['total_pages'], batch_size):
+            end_page = min(start_page + batch_size, content['total_pages'])
+            
+            # Update progress
+            progress_percent = 20 + int((start_page / content['total_pages']) * 65)  # 20-85%
+            session['conversion_progress']['percent'] = progress_percent
+            session['conversion_progress']['message'] = f'Converting pages {start_page + 1}-{end_page}...'
+            session['conversion_progress']['details'] = f'Batch {start_page//batch_size + 1} of {(content["total_pages"] + batch_size - 1)//batch_size}'
+            session.modified = True
+            
+            logging.info(f"Processing pages {start_page + 1}-{end_page}...")
+            
+            try:
+                images = convert_from_path(
+                    pdf_path,
+                    dpi=dpi,
+                    first_page=start_page + 1,
+                    last_page=end_page,
+                    fmt='JPEG',
+                    jpegopt={'quality': 85, 'progressive': True, 'optimize': True}
+                )
+                
+                for i, image in enumerate(images):
+                    page_num = start_page + i + 1
+                    img_path = os.path.join(EXTRACTED_FOLDER, f'page_{page_num}.jpg')
+                    
+                    # Save optimized image
+                    image.save(img_path, 'JPEG', quality=85, optimize=True)
+                    
+                    page_content = {
+                        'page_number': page_num,
+                        'image_path': img_path,
+                        'width': image.width,
+                        'height': image.height,
+                        'text': '',  # Keep for search functionality if needed
+                        'type': 'image'
+                    }
+                    content['pages'].append(page_content)
+                    
+            except Exception as e:
+                logging.error(f"Error converting pages {start_page + 1}-{end_page}: {e}")
+                # Continue with next batch
+                continue
+        
+        content['total_pages'] = len(content['pages'])
+        
+        # Update final progress
+        session['conversion_progress']['percent'] = 85
+        session['conversion_progress']['message'] = f'Successfully converted {content["total_pages"]} pages'
+        session.modified = True
+        
+        logging.info(f"Successfully converted {content['total_pages']} pages to images")
+        return content
+        
+    except ImportError:
+        logging.warning("pdf2image not available, falling back to PyMuPDF")
+        return convert_pdf_to_images_pymupdf_with_progress(pdf_path)
+    except Exception as e:
+        logging.error(f"pdf2image failed: {e}, falling back to PyMuPDF")
+        return convert_pdf_to_images_pymupdf_with_progress(pdf_path)
+
+def convert_pdf_to_images_pymupdf_with_progress(pdf_path):
+    """Convert PDF to images using PyMuPDF with progress tracking"""
+    if fitz is None:
+        raise ImportError("PyMuPDF (fitz) is not available")
+    
+    content = {
+        'pages': [],
+        'total_pages': 0,
+        'title': '',
+        'metadata': {}
+    }
+    
+    doc = fitz.open(pdf_path)
+    content['total_pages'] = doc.page_count
+    content['metadata'] = doc.metadata or {}
+    content['title'] = content['metadata'].get('title', 'PDF Tutorial') or 'PDF Tutorial'
+    
+    # Update progress
+    session['conversion_progress']['percent'] = 25
+    session['conversion_progress']['message'] = f'Converting {content["total_pages"]} pages using fallback method...'
+    session.modified = True
+    
+    logging.info(f"Converting {content['total_pages']} pages to images using PyMuPDF...")
+    
+    # Optimize matrix for different file sizes
+    zoom = 1.5 if content['total_pages'] < 200 else 1.0  # Lower zoom for large files
+    mat = fitz.Matrix(zoom, zoom)
+    
+    for i in range(doc.page_count):
+        # Update progress every 50 pages
+        if i % 50 == 0:
+            progress_percent = 25 + int((i / content['total_pages']) * 60)  # 25-85%
+            session['conversion_progress']['percent'] = progress_percent
+            session['conversion_progress']['message'] = f'Converting page {i+1}/{content["total_pages"]}'
+            session.modified = True
+            logging.info(f"Converting page {i+1}/{content['total_pages']}")
+            
+        try:
+            page = doc[i]
+            pix = page.get_pixmap(matrix=mat)
+            
+            img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}.jpg')
+            pix.save(img_path, output='jpg', jpg_quality=85)
+            
+            page_content = {
+                'page_number': i + 1,
+                'image_path': img_path,
+                'width': pix.width,
+                'height': pix.height,
+                'text': '',
+                'type': 'image'
+            }
+            content['pages'].append(page_content)
+            pix = None  # Free memory
+            
+        except Exception as e:
+            logging.warning(f"Error converting page {i+1}: {e}")
+            continue
+    
+    doc.close()
+    content['total_pages'] = len(content['pages'])
+    
+    # Update final progress
+    session['conversion_progress']['percent'] = 85
+    session['conversion_progress']['message'] = f'Successfully converted {content["total_pages"]} pages'
+    session.modified = True
+    
+    logging.info(f"Successfully converted {content['total_pages']} pages to images")
+    return content
+
 @app.route('/')
 def index():
     """Main page - show upload form or tutorial if PDF is in session"""
@@ -388,17 +552,38 @@ def upload_file():
                 filename = secure_filename(file.filename or 'unknown.pdf')
                 filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 
+                # Initialize progress tracking
+                session['conversion_progress'] = {
+                    'status': 'uploading',
+                    'percent': 0,
+                    'message': 'Uploading file...',
+                    'details': ''
+                }
+                session.modified = True
+                
                 logging.info(f"Saving file to: {filepath}")
                 file.save(filepath)
+                
+                # Update progress
+                session['conversion_progress']['status'] = 'processing'
+                session['conversion_progress']['percent'] = 10
+                session['conversion_progress']['message'] = 'File uploaded, starting conversion...'
+                session.modified = True
                 
                 # Check file size
                 file_size = os.path.getsize(filepath)
                 logging.info(f"Uploaded file size: {file_size} bytes")
                 
-                # Extract PDF content
+                # Extract PDF content with progress updates
                 logging.info("Starting PDF content extraction...")
-                pdf_content = extract_pdf_content(filepath)
+                pdf_content = extract_pdf_content_with_progress(filepath)
                 logging.info(f"Extracted {pdf_content['total_pages']} pages")
+                
+                # Update progress
+                session['conversion_progress']['status'] = 'saving'
+                session['conversion_progress']['percent'] = 90
+                session['conversion_progress']['message'] = 'Saving processed data...'
+                session.modified = True
                 
                 # Save PDF data to disk and store only ID in session
                 pdf_id = save_pdf_data(pdf_content, filename)
@@ -412,10 +597,23 @@ def upload_file():
                     'total_pages': pdf_content['total_pages']
                 }
                 
+                # Mark conversion complete
+                session['conversion_progress']['status'] = 'complete'
+                session['conversion_progress']['percent'] = 100
+                session['conversion_progress']['message'] = 'Conversion complete!'
+                session.modified = True
+                
                 flash(f'Successfully loaded: {pdf_content["title"]}', 'success')
                 return redirect(url_for('index'))
                 
             except Exception as e:
+                session['conversion_progress'] = {
+                    'status': 'error',
+                    'percent': 0,
+                    'message': f'Error: {str(e)}',
+                    'details': ''
+                }
+                session.modified = True
                 logging.error(f"Error processing upload: {e}")
                 import traceback
                 logging.error(f"Full traceback: {traceback.format_exc()}")
@@ -425,6 +623,13 @@ def upload_file():
             flash('Invalid file type. Please upload a PDF file.', 'error')
             return redirect(url_for('index'))
     except Exception as e:
+        session['conversion_progress'] = {
+            'status': 'error',
+            'percent': 0,
+            'message': f'Upload error: {str(e)}',
+            'details': ''
+        }
+        session.modified = True
         logging.error(f"Error in upload_file function: {e}")
         import traceback
         logging.error(f"Full traceback: {traceback.format_exc()}")
@@ -449,7 +654,17 @@ def get_page(page_num):
     session['current_page'] = page_num
     
     # Convert absolute path to relative path for serving
-    image_path = page_content['image_path'].replace('static/', '')
+    if isinstance(page_content, dict):
+        image_path = page_content.get('image_path', '')
+    else:
+        image_path = f"extracted/page_{page_num}.jpg"
+    if image_path:
+        if image_path.startswith('static/'):
+            image_path = image_path.replace('static/', '')
+        else:
+            image_path = f"extracted/{os.path.basename(image_path)}"
+    else:
+        image_path = f"extracted/page_{page_num}.jpg"
     
     return jsonify({
         'success': True,
@@ -558,6 +773,17 @@ def notes():
         return jsonify({'success': True})
     
     return jsonify({'notes': session.get('notes', {})})
+
+@app.route('/api/progress')
+def get_progress():
+    """Get current conversion progress"""
+    progress = session.get('conversion_progress', {
+        'status': 'idle',
+        'percent': 0,
+        'message': 'Ready',
+        'details': ''
+    })
+    return jsonify(progress)
 
 @app.route('/clear')
 def clear_session():
