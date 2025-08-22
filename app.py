@@ -7,10 +7,13 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 import pdfplumber
+import fitz  # PyMuPDF
 from PIL import Image
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
+# Configure logging with reduced verbosity
+logging.basicConfig(level=logging.INFO)
+# Reduce pdfminer logging to prevent conflicts
+logging.getLogger('pdfminer').setLevel(logging.WARNING)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-production")
@@ -33,8 +36,8 @@ os.makedirs(EXTRACTED_FOLDER, exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def extract_pdf_content(pdf_path):
-    """Extract text, images, and basic table data from PDF"""
+def extract_pdf_content_pdfplumber(pdf_path):
+    """Extract PDF content using pdfplumber"""
     content = {
         'pages': [],
         'total_pages': 0,
@@ -42,60 +45,137 @@ def extract_pdf_content(pdf_path):
         'metadata': {}
     }
     
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            content['total_pages'] = len(pdf.pages)
-            content['metadata'] = pdf.metadata or {}
-            content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
+    with pdfplumber.open(pdf_path) as pdf:
+        content['total_pages'] = len(pdf.pages)
+        content['metadata'] = pdf.metadata or {}
+        content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
+        
+        for i, page in enumerate(pdf.pages):
+            page_content = {
+                'page_number': i + 1,
+                'text': '',
+                'images': [],
+                'tables': [],
+                'bbox': page.bbox
+            }
             
-            for i, page in enumerate(pdf.pages):
-                page_content = {
-                    'page_number': i + 1,
-                    'text': '',
-                    'images': [],
-                    'tables': [],
-                    'bbox': page.bbox
-                }
-                
-                # Extract text
+            # Extract text with error handling
+            try:
                 text = page.extract_text()
                 if text:
                     page_content['text'] = text.strip()
-                
-                # Extract tables
+            except Exception as e:
+                logging.warning(f"Could not extract text from page {i+1}: {e}")
+                page_content['text'] = f"[Text extraction failed for page {i+1}]"
+            
+            # Extract tables with error handling
+            try:
                 tables = page.extract_tables()
                 if tables:
                     for table in tables:
                         if table:  # Skip empty tables
                             page_content['tables'].append(table)
-                
-                # Extract images
-                try:
-                    if hasattr(page, 'images') and page.images:
-                        for img_idx, img in enumerate(page.images):
-                            try:
-                                # Extract image data
-                                img_obj = page.crop(img['bbox']).to_image()
-                                img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
-                                img_obj.save(img_path)
-                                
-                                page_content['images'].append({
-                                    'path': img_path,
-                                    'bbox': img['bbox'],
-                                    'index': img_idx
-                                })
-                            except Exception as e:
-                                logging.error(f"Error extracting image {img_idx} from page {i+1}: {e}")
-                except Exception as e:
-                    logging.error(f"Error processing images on page {i+1}: {e}")
-                
-                content['pages'].append(page_content)
-                
-    except Exception as e:
-        logging.error(f"Error processing PDF: {e}")
-        raise Exception(f"Failed to process PDF: {str(e)}")
+            except Exception as e:
+                logging.warning(f"Could not extract tables from page {i+1}: {e}")
+            
+            # Extract images with error handling
+            try:
+                if hasattr(page, 'images') and page.images:
+                    for img_idx, img in enumerate(page.images):
+                        try:
+                            # Extract image data
+                            img_obj = page.crop(img['bbox']).to_image()
+                            img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
+                            img_obj.save(img_path)
+                            
+                            page_content['images'].append({
+                                'path': img_path,
+                                'bbox': img['bbox'],
+                                'index': img_idx
+                            })
+                        except Exception as e:
+                            logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
+            except Exception as e:
+                logging.warning(f"Error processing images on page {i+1}: {e}")
+            
+            content['pages'].append(page_content)
     
     return content
+
+def extract_pdf_content_pymupdf(pdf_path):
+    """Extract PDF content using PyMuPDF as fallback"""
+    content = {
+        'pages': [],
+        'total_pages': 0,
+        'title': '',
+        'metadata': {}
+    }
+    
+    doc = fitz.open(pdf_path)
+    content['total_pages'] = doc.page_count
+    content['metadata'] = doc.metadata
+    content['title'] = content['metadata'].get('title', 'PDF Tutorial') or 'PDF Tutorial'
+    
+    for i in range(doc.page_count):
+        page = doc[i]
+        page_content = {
+            'page_number': i + 1,
+            'text': '',
+            'images': [],
+            'tables': [],
+            'bbox': page.rect
+        }
+        
+        # Extract text
+        try:
+            text = page.get_text()
+            if text:
+                page_content['text'] = text.strip()
+        except Exception as e:
+            logging.warning(f"Could not extract text from page {i+1}: {e}")
+            page_content['text'] = f"[Text extraction failed for page {i+1}]"
+        
+        # Extract images
+        try:
+            image_list = page.get_images()
+            for img_idx, img in enumerate(image_list):
+                try:
+                    xref = img[0]
+                    pix = fitz.Pixmap(doc, xref)
+                    if pix.n < 5:  # GRAY or RGB
+                        img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}_img_{img_idx}.png')
+                        pix.save(img_path)
+                        page_content['images'].append({
+                            'path': img_path,
+                            'bbox': [0, 0, pix.width, pix.height],
+                            'index': img_idx
+                        })
+                    pix = None
+                except Exception as e:
+                    logging.warning(f"Error extracting image {img_idx} from page {i+1}: {e}")
+        except Exception as e:
+            logging.warning(f"Error processing images on page {i+1}: {e}")
+        
+        content['pages'].append(page_content)
+    
+    doc.close()
+    return content
+
+def extract_pdf_content(pdf_path):
+    """Extract text, images, and basic table data from PDF with fallback methods"""
+    try:
+        # Try pdfplumber first (better for tables and structured text)
+        logging.info("Attempting PDF extraction with pdfplumber...")
+        return extract_pdf_content_pdfplumber(pdf_path)
+    except Exception as e:
+        logging.warning(f"pdfplumber failed: {e}")
+        try:
+            # Fallback to PyMuPDF (more robust for problematic PDFs)
+            logging.info("Falling back to PyMuPDF extraction...")
+            return extract_pdf_content_pymupdf(pdf_path)
+        except Exception as e2:
+            logging.error(f"Both extraction methods failed. pdfplumber: {e}, PyMuPDF: {e2}")
+            raise Exception(f"Failed to process PDF with both methods: pdfplumber ({str(e)}) and PyMuPDF ({str(e2)})")
 
 @app.route('/')
 def index():
