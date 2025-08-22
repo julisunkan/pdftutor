@@ -2,7 +2,7 @@ modules = ["nodejs-20", "python-3.11", "web"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["freetype", "gumbo", "harfbuzz", "jbig2dec", "lcms2", "libimagequant", "libjpeg", "libjpeg_turbo", "libtiff", "libwebp", "libxcrypt", "mupdf", "openjpeg", "openssl", "poppler_utils", "postgresql", "swig", "tcl", "tk", "xcbuild", "zlib"]
+packages = ["freetype", "gumbo", "harfbuzz", "jbig2dec", "lcms2", "libimagequant", "libjpeg", "libjpeg_turbo", "libtiff", "libwebp", "libxcrypt", "mupdf", "openjpeg", "openssl", "poppler", "poppler_utils", "postgresql", "swig", "tcl", "tk", "xcbuild", "zlib"]
 
 [deployment]
 deploymentTarget = "autoscale"

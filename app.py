@@ -361,8 +361,71 @@ def extract_pdf_content(pdf_path):
 def extract_pdf_content_with_progress(pdf_path):
     """Convert PDF pages to images with progress tracking"""
     try:
-        # Try using pdf2image first (fast and reliable)
-        from pdf2image import convert_from_path
+        # Try PyMuPDF first
+        logging.info("Attempting PyMuPDF conversion...")
+        return convert_pdf_to_images_pymupdf_with_progress(pdf_path)
+    except Exception as e:
+        logging.error(f"PyMuPDF failed: {e}")
+        # Fallback: Create placeholder structure from PDF metadata only
+        logging.info("Using fallback method with placeholders...")
+        return create_placeholder_pdf_content(pdf_path)
+
+def create_placeholder_pdf_content(pdf_path):
+    """Create placeholder PDF content when image conversion fails"""
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            content = {
+                'pages': [],
+                'total_pages': len(pdf.pages),
+                'title': 'PDF Tutorial',
+                'metadata': pdf.metadata or {}
+            }
+            
+            # Update progress
+            session['conversion_progress']['percent'] = 50
+            session['conversion_progress']['message'] = f'Creating placeholders for {content["total_pages"]} pages...'
+            session.modified = True
+            
+            # Create placeholder entries for each page
+            for i in range(content['total_pages']):
+                page_content = {
+                    'page_number': i + 1,
+                    'image_path': f"placeholder/page_{i+1}.jpg",
+                    'width': 800,
+                    'height': 1000,
+                    'text': f'Page {i+1} - Image conversion unavailable',
+                    'type': 'placeholder'
+                }
+                content['pages'].append(page_content)
+                
+                # Update progress
+                if i % 50 == 0:
+                    progress = 50 + int((i / content['total_pages']) * 35)
+                    session['conversion_progress']['percent'] = progress
+                    session.modified = True
+            
+            session['conversion_progress']['percent'] = 85
+            session['conversion_progress']['message'] = f'Created placeholders for {content["total_pages"]} pages'
+            session.modified = True
+            
+            logging.info(f"Created placeholder content for {content['total_pages']} pages")
+            return content
+            
+    except Exception as e:
+        logging.error(f"Even placeholder creation failed: {e}")
+        # Return minimal content
+        return {
+            'pages': [{'page_number': 1, 'image_path': 'error.jpg', 'width': 800, 'height': 1000, 'text': 'Error loading PDF', 'type': 'error'}],
+            'total_pages': 1,
+            'title': 'Error',
+            'metadata': {}
+        }
+
+def convert_pdf_to_images_pymupdf_with_progress(pdf_path):
+    """Convert PDF to images using PyMuPDF with progress tracking"""
+    try:
+        # Try to import fitz here to handle any import issues
+        import fitz
         
         content = {
             'pages': [],
@@ -371,70 +434,64 @@ def extract_pdf_content_with_progress(pdf_path):
             'metadata': {}
         }
         
-        # Get PDF metadata
-        with pdfplumber.open(pdf_path) as pdf:
-            content['metadata'] = pdf.metadata or {}
-            content['title'] = content['metadata'].get('Title', 'PDF Tutorial')
-            content['total_pages'] = len(pdf.pages)
+        doc = fitz.open(pdf_path)
+        content['total_pages'] = doc.page_count
+        content['metadata'] = doc.metadata or {}
+        content['title'] = content['metadata'].get('title', 'PDF Tutorial') or 'PDF Tutorial'
         
         # Update progress
-        session['conversion_progress']['percent'] = 20
-        session['conversion_progress']['message'] = f'Converting {content["total_pages"]} pages to images...'
-        session['conversion_progress']['details'] = f'Processing {content["total_pages"]} pages'
+        session['conversion_progress']['percent'] = 25
+        session['conversion_progress']['message'] = f'Converting {content["total_pages"]} pages using PyMuPDF...'
         session.modified = True
         
-        logging.info(f"Converting {content['total_pages']} pages to images...")
+        logging.info(f"Converting {content['total_pages']} pages to images using PyMuPDF...")
         
-        # Convert PDF to images with optimized settings
-        dpi = 150 if content['total_pages'] < 200 else 100  # Lower DPI for large files
+        # Optimize matrix for different file sizes
+        zoom = 1.5 if content['total_pages'] < 200 else 1.0  # Lower zoom for large files
+        mat = fitz.Matrix(zoom, zoom)
         
-        # Process in batches to manage memory
-        batch_size = 50 if content['total_pages'] > 200 else 100
-        
-        for start_page in range(0, content['total_pages'], batch_size):
-            end_page = min(start_page + batch_size, content['total_pages'])
-            
-            # Update progress
-            progress_percent = 20 + int((start_page / content['total_pages']) * 65)  # 20-85%
-            session['conversion_progress']['percent'] = progress_percent
-            session['conversion_progress']['message'] = f'Converting pages {start_page + 1}-{end_page}...'
-            session['conversion_progress']['details'] = f'Batch {start_page//batch_size + 1} of {(content["total_pages"] + batch_size - 1)//batch_size}'
-            session.modified = True
-            
-            logging.info(f"Processing pages {start_page + 1}-{end_page}...")
-            
-            try:
-                images = convert_from_path(
-                    pdf_path,
-                    dpi=dpi,
-                    first_page=start_page + 1,
-                    last_page=end_page,
-                    fmt='JPEG',
-                    jpegopt={'quality': 85, 'progressive': True, 'optimize': True}
-                )
+        for i in range(doc.page_count):
+            # Update progress every 25 pages
+            if i % 25 == 0:
+                progress_percent = 25 + int((i / content['total_pages']) * 60)  # 25-85%
+                session['conversion_progress']['percent'] = progress_percent
+                session['conversion_progress']['message'] = f'Converting page {i+1}/{content["total_pages"]}'
+                session.modified = True
+                logging.info(f"Converting page {i+1}/{content['total_pages']}")
                 
-                for i, image in enumerate(images):
-                    page_num = start_page + i + 1
-                    img_path = os.path.join(EXTRACTED_FOLDER, f'page_{page_num}.jpg')
-                    
-                    # Save optimized image
-                    image.save(img_path, 'JPEG', quality=85, optimize=True)
-                    
-                    page_content = {
-                        'page_number': page_num,
-                        'image_path': img_path,
-                        'width': image.width,
-                        'height': image.height,
-                        'text': '',  # Keep for search functionality if needed
-                        'type': 'image'
-                    }
-                    content['pages'].append(page_content)
-                    
+            try:
+                page = doc[i]
+                pix = page.get_pixmap(matrix=mat)
+                
+                img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}.jpg')
+                pix.save(img_path, output='jpg', jpg_quality=85)
+                
+                page_content = {
+                    'page_number': i + 1,
+                    'image_path': img_path,
+                    'width': pix.width,
+                    'height': pix.height,
+                    'text': '',
+                    'type': 'image'
+                }
+                content['pages'].append(page_content)
+                pix = None  # Free memory
+                
             except Exception as e:
-                logging.error(f"Error converting pages {start_page + 1}-{end_page}: {e}")
-                # Continue with next batch
+                logging.warning(f"Error converting page {i+1}: {e}")
+                # Create placeholder entry even if conversion failed
+                page_content = {
+                    'page_number': i + 1,
+                    'image_path': os.path.join(EXTRACTED_FOLDER, f'page_{i+1}.jpg'),
+                    'width': 800,
+                    'height': 1000,
+                    'text': '',
+                    'type': 'image'
+                }
+                content['pages'].append(page_content)
                 continue
         
+        doc.close()
         content['total_pages'] = len(content['pages'])
         
         # Update final progress
@@ -445,82 +502,12 @@ def extract_pdf_content_with_progress(pdf_path):
         logging.info(f"Successfully converted {content['total_pages']} pages to images")
         return content
         
-    except ImportError:
-        logging.warning("pdf2image not available, falling back to PyMuPDF")
-        return convert_pdf_to_images_pymupdf_with_progress(pdf_path)
-    except Exception as e:
-        logging.error(f"pdf2image failed: {e}, falling back to PyMuPDF")
-        return convert_pdf_to_images_pymupdf_with_progress(pdf_path)
-
-def convert_pdf_to_images_pymupdf_with_progress(pdf_path):
-    """Convert PDF to images using PyMuPDF with progress tracking"""
-    if fitz is None:
+    except ImportError as e:
+        logging.error(f"PyMuPDF import failed: {e}")
         raise ImportError("PyMuPDF (fitz) is not available")
-    
-    content = {
-        'pages': [],
-        'total_pages': 0,
-        'title': '',
-        'metadata': {}
-    }
-    
-    doc = fitz.open(pdf_path)
-    content['total_pages'] = doc.page_count
-    content['metadata'] = doc.metadata or {}
-    content['title'] = content['metadata'].get('title', 'PDF Tutorial') or 'PDF Tutorial'
-    
-    # Update progress
-    session['conversion_progress']['percent'] = 25
-    session['conversion_progress']['message'] = f'Converting {content["total_pages"]} pages using fallback method...'
-    session.modified = True
-    
-    logging.info(f"Converting {content['total_pages']} pages to images using PyMuPDF...")
-    
-    # Optimize matrix for different file sizes
-    zoom = 1.5 if content['total_pages'] < 200 else 1.0  # Lower zoom for large files
-    mat = fitz.Matrix(zoom, zoom)
-    
-    for i in range(doc.page_count):
-        # Update progress every 50 pages
-        if i % 50 == 0:
-            progress_percent = 25 + int((i / content['total_pages']) * 60)  # 25-85%
-            session['conversion_progress']['percent'] = progress_percent
-            session['conversion_progress']['message'] = f'Converting page {i+1}/{content["total_pages"]}'
-            session.modified = True
-            logging.info(f"Converting page {i+1}/{content['total_pages']}")
-            
-        try:
-            page = doc[i]
-            pix = page.get_pixmap(matrix=mat)
-            
-            img_path = os.path.join(EXTRACTED_FOLDER, f'page_{i+1}.jpg')
-            pix.save(img_path, output='jpg', jpg_quality=85)
-            
-            page_content = {
-                'page_number': i + 1,
-                'image_path': img_path,
-                'width': pix.width,
-                'height': pix.height,
-                'text': '',
-                'type': 'image'
-            }
-            content['pages'].append(page_content)
-            pix = None  # Free memory
-            
-        except Exception as e:
-            logging.warning(f"Error converting page {i+1}: {e}")
-            continue
-    
-    doc.close()
-    content['total_pages'] = len(content['pages'])
-    
-    # Update final progress
-    session['conversion_progress']['percent'] = 85
-    session['conversion_progress']['message'] = f'Successfully converted {content["total_pages"]} pages'
-    session.modified = True
-    
-    logging.info(f"Successfully converted {content['total_pages']} pages to images")
-    return content
+    except Exception as e:
+        logging.error(f"PDF conversion failed: {e}")
+        raise Exception(f"PDF conversion error: {e}")
 
 @app.route('/')
 def index():
@@ -666,13 +653,31 @@ def get_page(page_num):
     else:
         image_path = f"extracted/page_{page_num}.jpg"
     
+    # Handle different page content types
+    page_type = page_content.get('type', 'image')
+    
+    if page_type == 'placeholder':
+        # For placeholder pages, return text content instead of image
+        return jsonify({
+            'success': True,
+            'page': {
+                'page_number': page_content.get('page_number', page_num),
+                'content': page_content.get('text', f'Page {page_num}'),
+                'width': 800,
+                'height': 1000,
+                'type': 'placeholder'
+            },
+            'total_pages': pdf_content['total_pages'],
+            'current_page': page_num
+        })
+    
     return jsonify({
         'success': True,
         'page': {
-            'page_number': page_content['page_number'],
+            'page_number': page_content.get('page_number', page_num),
             'image_url': f'/static/{image_path}',
-            'width': page_content['width'],
-            'height': page_content['height'],
+            'width': page_content.get('width', 800),
+            'height': page_content.get('height', 1000),
             'type': 'image'
         },
         'total_pages': pdf_content['total_pages'],

@@ -302,11 +302,19 @@ class PDFTutorialApp {
                 </div>
                 
                 <div class="page-image-container">
-                    <img src="${pageData.image_url}" 
-                         class="page-image img-fluid" 
-                         alt="Page ${pageData.page_number}" 
-                         style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);"
-                         loading="lazy">
+                    ${pageData.type === 'placeholder' ? 
+                        `<div class="placeholder-content text-center p-4" style="min-height: 400px; display: flex; flex-direction: column; justify-content: center; border-radius: 8px; border: 2px dashed #ccc;">
+                            <i class="fas fa-file-pdf fa-4x mb-3 text-muted"></i>
+                            <h5>PDF Page ${pageData.page_number}</h5>
+                            <p class="text-muted">${pageData.content || 'Content processing unavailable'}</p>
+                            <small class="text-info">Image conversion is temporarily unavailable</small>
+                        </div>` :
+                        `<img src="${pageData.image_url}" 
+                             class="page-image img-fluid" 
+                             alt="Page ${pageData.page_number}" 
+                             style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);"
+                             loading="lazy">`
+                    }
                 </div>
         `;
         
